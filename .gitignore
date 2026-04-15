@@ -1,0 +1,18 @@
+# OS artefacts
+.DS_Store
+Thumbs.db
+
+# Editor directories
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Arc node runtime files (should never be committed)
+arc-setup.log
+.arc-setup-state
+.arc-setup.lock
+
+# Backup keys (NEVER commit your node_key.json)
+.arc-key-backup/
+node_key*.json
