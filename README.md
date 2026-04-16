@@ -86,6 +86,9 @@ Setup takes **20–60 minutes** on a fast machine (dominated by Rust compilation
 ## Quick Start
 
 ```bash
+# One command to setup
+curl -fsSL https://raw.githubusercontent.com/candyburst/arc-node-setup/main/setup.sh | bash
+
 # Download
 curl -O https://raw.githubusercontent.com/candyburst/arc-node-setup/main/setup.sh
 chmod +x setup.sh
