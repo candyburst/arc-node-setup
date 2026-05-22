@@ -33,7 +33,7 @@ assert_file_contains setup.sh '^CONSENSUS_KEY_BASENAME="priv_validator_key\.json
 assert_file_contains setup.sh '^EL_RPC_PORT=8545$'
 assert_file_contains setup.sh '^EL_P2P_PORT=30303$'
 assert_file_contains setup.sh '^CL_RPC_PORT=31000$'
-assert_file_contains setup.sh '^CL_P2P_PORT=31001$'
+assert_file_contains setup.sh '^CL_P2P_PORT=27000$'
 assert_file_contains setup.sh '^MIN_DISK_GB=200$'
 assert_file_contains setup.sh 'systemctl show "\$svc" --property=LoadState --value'
 assert_file_contains setup.sh '--private-key \$\{ARC_CONSENSUS_DIR\}/config/\$\{CONSENSUS_KEY_BASENAME\}'
@@ -43,6 +43,7 @@ assert_file_contains setup.sh '--follow\.endpoint https://rpc\.drpc\.testnet\.ar
 assert_file_contains setup.sh '--follow\.endpoint https://rpc\.blockdaemon\.testnet\.arc\.network,wss=rpc\.blockdaemon\.testnet\.arc\.network/websocket'
 assert_file_contains setup.sh '--execution-persistence-backpressure[[:space:]]*\\\\'
 assert_file_contains setup.sh '--execution-persistence-backpressure-threshold=50'
+assert_file_contains setup.sh '^Restart=always$'
 assert_file_contains setup.sh 'sudo ufw allow "\$\{EL_P2P_PORT\}/tcp"'
 assert_file_contains setup.sh 'sudo ufw allow "\$\{EL_P2P_PORT\}/udp"'
 assert_file_contains setup.sh 'sudo ufw allow "\$\{CL_P2P_PORT\}/tcp"'
@@ -63,6 +64,14 @@ fi
 
 if grep -Eq 'will sync from genesis|syncs from genesis|sync from genesis \(very slow\)' setup.sh README.md; then
   fail 'snapshot skip guidance still claims a fresh genesis sync is supported'
+fi
+
+if grep -Eq 'LAN/WAN' setup.sh README.md; then
+  fail 'RPC exposure guidance still says LAN/WAN'
+fi
+
+if grep -Eq '31001' setup.sh README.md CHANGELOG.md; then
+  fail 'stale consensus P2P port 31001 remains'
 fi
 
 tmp_dir="$(mktemp -d)"

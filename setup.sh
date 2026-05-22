@@ -71,7 +71,7 @@ EL_RPC_PORT=8545
 EL_P2P_PORT=30303
 EL_METRICS_PORT=9001
 CL_RPC_PORT=31000
-CL_P2P_PORT=31001
+CL_P2P_PORT=27000
 CL_METRICS_PORT=29000
 
 NET_RPC_ENDPOINTS=(
@@ -180,7 +180,7 @@ ${BOLD}COMMANDS${NC}
 ${BOLD}SETUP OPTIONS${NC}
   ${YELLOW}-y, --yes${NC}           Skip all yes/no prompts (non-interactive)
   ${YELLOW}--skip-snap${NC}         Skip snapshot download (requires existing data)
-  ${YELLOW}--expose-rpc${NC}        Bind JSON-RPC on 0.0.0.0 (needed for MetaMask over LAN/WAN)
+  ${YELLOW}--expose-rpc${NC}        Bind JSON-RPC on 0.0.0.0 (for private/LAN access)
   ${YELLOW}--with-firewall${NC}     Auto-configure ufw firewall rules
   ${YELLOW}--swap SIZE${NC}         Create swap file, e.g. --swap 16G  (use if RAM < ${MIN_RAM_GB} GB)
   ${YELLOW}--version VER${NC}       Arc version to install  (default: ${ARC_VERSION_DEFAULT})
@@ -926,7 +926,7 @@ ExecStart=${bin_path}/arc-node-execution node \\
   --enable-arc-rpc \\
   --rpc.forwarder ${rpc_forwarder}
 
-Restart=on-failure
+Restart=always
 RestartSec=10
 KillSignal=SIGTERM
 TimeoutStopSec=300
@@ -971,7 +971,7 @@ ExecStart=${bin_path}/arc-node-consensus start \\
   --execution-persistence-backpressure-threshold=50 \\
   --metrics 127.0.0.1:${CL_METRICS_PORT}
 
-Restart=on-failure
+Restart=always
 RestartSec=10
 KillSignal=SIGTERM
 TimeoutStopSec=300

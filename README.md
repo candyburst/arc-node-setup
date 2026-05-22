@@ -143,7 +143,7 @@ All options apply to the `setup` command:
 |---|---|
 | `-y`, `--yes` | Skip all yes/no prompts (non-interactive / CI mode) |
 | `--skip-snap` | Skip snapshot download — only for existing compatible data |
-| `--expose-rpc` | Bind JSON-RPC on `0.0.0.0` — needed for MetaMask over LAN/WAN |
+| `--expose-rpc` | Bind JSON-RPC on `0.0.0.0` — for private/LAN access |
 | `--with-firewall` | Auto-configure `ufw` firewall rules |
 | `--swap SIZE` | Create a swap file, e.g. `--swap 16G` |
 | `--version VER` | Install a specific Arc version, e.g. `--version v0.7.1` |
@@ -237,7 +237,7 @@ Writes two systemd unit files:
 
 Both services:
 - Start automatically on boot (`WantedBy=multi-user.target`)
-- Restart automatically on crash (`Restart=on-failure`, 10-second delay)
+- Restart automatically (`Restart=always`, 10-second delay)
 - Log to `journald`
 - Have `LimitNOFILE=1048576`
 
@@ -268,7 +268,7 @@ A block advance confirms the node is receiving and processing new blocks.
 | CL Metrics (Prometheus) | `http://localhost:29000/metrics` | — |
 | EL P2P TCP | `0.0.0.0:30303` | — |
 | EL P2P UDP | `0.0.0.0:30303` | — |
-| CL P2P TCP | `0.0.0.0:31001` | — |
+| CL P2P TCP | `0.0.0.0:27000` | — |
 
 ---
 
@@ -380,7 +380,7 @@ The script:
 ./setup.sh setup --expose-rpc
 ```
 
-Binds the JSON-RPC server on `0.0.0.0:8545` instead of `localhost:8545`. After setup, your public IP is printed as the MetaMask RPC URL. Combine with `--with-firewall` to restrict access by port.
+Binds the JSON-RPC server on `0.0.0.0:8545` instead of `localhost:8545`. Use this for private/LAN access or with explicit cloud firewall/VPC source restrictions. If `--with-firewall` is also used, the script opens only the selected Arc ports, but it does not restrict which remote IPs can reach `8545`.
 
 ### Firewall (ufw)
 
@@ -394,7 +394,7 @@ Configures `ufw` with these rules:
 |---|---|
 | `allow ssh` | Prevent lockout |
 | `allow 30303/tcp` + `30303/udp` | EL P2P — without this, incoming peers are silently dropped |
-| `allow 31001/tcp` | CL P2P |
+| `allow 27000/tcp` | CL P2P |
 | `allow 8545/tcp` | JSON-RPC (only if `--expose-rpc` is also set) |
 | `deny incoming` (default) | Block everything else |
 
@@ -505,7 +505,7 @@ sudo journalctl -u arc-consensus -n 50
 ```
 
 **Node not syncing / zero peers**
-- Ensure ports `30303` (TCP+UDP) and `31001` (TCP) are open inbound on your firewall/VPC security group.
+- Ensure ports `30303` (TCP+UDP) and `27000` (TCP) are open inbound on your firewall/VPC security group.
 - Check you have outbound internet access.
 - Run `./setup.sh monitor` and watch the peer count.
 
