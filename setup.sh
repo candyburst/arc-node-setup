@@ -2,7 +2,7 @@
 # ============================================================
 #  Arc Node Setup & Management Script
 #  Supports : Ubuntu 22.04+ · Debian 12+
-#  Arc Testnet v0.6.0
+#  Arc Testnet v0.7.1
 #  https://github.com/candyburst/arc-node-setup
 # ============================================================
 #
@@ -14,12 +14,12 @@
 #    monitor          Live dashboard — refreshes every 5s  (Ctrl+C to exit)
 #    status           Quick one-shot status snapshot
 #    logs             Tail live logs:  logs el | logs cl | logs both
-#    update           Upgrade to a new version:  update v0.7.0
+#    update           Upgrade to a new version:  update v0.7.1
 #    restart          Restart both services
 #    stop             Stop both services
 #    start            Start both services
 #    uninstall        Guided removal of services, binaries, and data
-#    rollback-sudo    Remove the passwordless sudo drop-in written during setup
+#    rollback-sudo    Remove a passwordless sudo drop-in for this user
 #    help             Show this help
 #
 #  SETUP OPTIONS:
@@ -28,7 +28,7 @@
 #    --expose-rpc        Bind JSON-RPC on 0.0.0.0 (needed for MetaMask over LAN)
 #    --with-firewall     Auto-configure ufw firewall rules
 #    --swap SIZE         Create swap file, e.g. --swap 16G
-#    --version VER       Arc version to install  (default: v0.6.0)
+#    --version VER       Arc version to install  (default: v0.7.1)
 #    -h, --help          Show this message
 #
 #  EXAMPLES:
@@ -39,7 +39,7 @@
 #    ./setup.sh monitor                  Open live monitoring dashboard
 #    ./setup.sh logs el                  Tail execution-layer logs
 #    ./setup.sh update                   Auto-detect latest version
-#    ./setup.sh update v0.7.0            Upgrade to specific version
+#    ./setup.sh update v0.7.1            Upgrade to specific version
 #    ./setup.sh uninstall                Guided removal
 # ============================================================
 
@@ -52,11 +52,12 @@ set -euo pipefail
 GITHUB_USER="candyburst"
 GITHUB_REPO="arc-node-setup"
 
-ARC_VERSION_DEFAULT="v0.6.0"
+ARC_VERSION_DEFAULT="v0.7.1"
 ARC_REPO="https://github.com/circlefin/arc-node.git"
 ARC_DATA_DIR="${HOME}/.arc"
 ARC_EXECUTION_DIR="${ARC_DATA_DIR}/execution"
 ARC_CONSENSUS_DIR="${ARC_DATA_DIR}/consensus"
+CONSENSUS_KEY_BASENAME="priv_validator_key.json"
 IPC_DIR="/run/arc"
 BUILD_DIR="${HOME}/arc-node-src"
 LOG_FILE="${HOME}/arc-setup.log"
@@ -66,6 +67,12 @@ BACKUP_DIR="${HOME}/.arc-key-backup"
 MIN_RAM_GB=64
 MIN_DISK_GB=150
 MONITOR_INTERVAL=5
+EL_RPC_PORT=8545
+EL_P2P_PORT=30303
+EL_METRICS_PORT=9001
+CL_RPC_PORT=31000
+CL_P2P_PORT=31001
+CL_METRICS_PORT=29000
 
 NET_RPC_ENDPOINTS=(
   "https://rpc.quicknode.testnet.arc.network/"
@@ -162,12 +169,12 @@ ${BOLD}COMMANDS${NC}
   ${CYAN}status${NC}           Quick one-shot status snapshot
   ${CYAN}logs${NC}             Tail live logs:  logs el | logs cl | logs both
   ${CYAN}update${NC}           Rebuild node — auto-detects latest version from GitHub
-                   or pass a specific tag:  update v0.7.0
+                   or pass a specific tag:  update v0.7.1
   ${CYAN}restart${NC}          Restart both services
   ${CYAN}stop${NC}             Stop both services
   ${CYAN}start${NC}            Start both services
   ${CYAN}uninstall${NC}        Guided removal of node
-  ${CYAN}rollback-sudo${NC}    Remove the passwordless sudo drop-in written during setup
+  ${CYAN}rollback-sudo${NC}    Remove a passwordless sudo drop-in for this user
   ${CYAN}help${NC}             Show this message
 
 ${BOLD}SETUP OPTIONS${NC}
@@ -187,7 +194,7 @@ ${BOLD}EXAMPLES${NC}
   ./setup.sh monitor                Live monitoring dashboard
   ./setup.sh logs el                Tail execution-layer logs
   ./setup.sh update                 Auto-detect latest version from GitHub releases API
-  ./setup.sh update v0.7.0          Upgrade to a specific version
+  ./setup.sh update v0.7.1          Upgrade to a specific version
   ./setup.sh uninstall              Guided removal
   ./setup.sh rollback-sudo          Remove the passwordless sudo drop-in
 
@@ -230,22 +237,15 @@ confirm_danger() {
 }
 
 # ════════════════════════════════════════════════════════════
-#  SELF-HEALING SUDO BOOTSTRAP
-#  Detects keypair-based VPS (no password set) and auto-
-#  configures passwordless sudo so the script never prompts.
+#  SUDO BOOTSTRAP
+#  Validates that sudo works before privileged setup steps run. Keypair-only
+#  VPS accounts with no password need passwordless sudo configured ahead of time.
 # ════════════════════════════════════════════════════════════
 _bootstrap_sudo() {
   # Already works non-interactively — nothing to do.
   if sudo -n true 2>/dev/null; then return 0; fi
 
   local drop_in="/etc/sudoers.d/${USER}-nopasswd"
-
-  # Idempotency: drop-in already written from a previous partial run.
-  # /etc/sudoers.d/ is root-owned so we can't stat it without sudo.
-  # The || true is required — with set -euo pipefail a failed sudo -n would
-  # otherwise abort the script here before we've even tried to write the file.
-  local already_written=false
-  sudo -n test -f "$drop_in" 2>/dev/null && already_written=true || true
 
   # Read the shadow password field without relying on sudo -n (which we know
   # has already failed at this point). Try getent shadow directly first (works
@@ -270,8 +270,12 @@ _bootstrap_sudo() {
     echo ""
     echo -e "  ${BOLD}${YELLOW}SUDO CONFIGURATION REQUIRED${NC}"
     echo -e "  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "  Setup needs passwordless sudo for the duration of the install."
-    echo -e "  It will write the following drop-in file:"
+    echo -e "  Setup needs sudo for package installs, systemd units, and /usr/local/bin."
+    echo -e "  Because sudo currently requires authentication and this account has no"
+    echo -e "  password, setup.sh cannot create the sudoers drop-in by itself."
+    echo ""
+    echo -e "  Create this file as root from your provider console, cloud-init, or an"
+    echo -e "  existing admin session, then re-run setup.sh:"
     echo ""
     echo -e "    ${CYAN}/etc/sudoers.d/${USER}-nopasswd${NC}"
     echo ""
@@ -284,47 +288,10 @@ _bootstrap_sudo() {
     echo -e "  ${YELLOW}   Run  ./setup.sh rollback-sudo  afterwards to remove it.${NC}"
     echo -e "  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
-
-    # In non-interactive / CI mode this is auto-accepted (user passed --yes or stdin is
-    # not a tty). In that case we still show the block above so the decision is auditable
-    # in any CI log.
-    if [[ -t 0 ]]; then
-      ask "Allow setup.sh to write this drop-in and continue? [Y/n] "
-      read -r _sudo_reply || true
-      _sudo_reply="${_sudo_reply:-y}"
-      if [[ ! "${_sudo_reply,,}" =~ ^(y|yes)$ ]]; then
-        echo -e "${RED}✖${NC}  Aborted — not writing sudoers drop-in."
-        echo -e "    Configure sudo yourself, then re-run setup.sh."
-        exit 1
-      fi
-    else
-      echo -e "${YELLOW}⚠${NC}  Non-interactive session — auto-accepting sudo drop-in (stdin is not a TTY)."
-    fi
-
-    if ! $already_written; then
-      # Write a validated sudoers drop-in. Keep ALL Defaults overrides inside
-      # the drop-in (never append directly to /etc/sudoers — no visudo check).
-      if sudo -n bash -c "
-          printf '%s\n' \
-            '${USER} ALL=(ALL) NOPASSWD:ALL' \
-            'Defaults:${USER} !use_pty' \
-            'Defaults:${USER} !authenticate' \
-            > '${drop_in}.tmp' \
-          && visudo -cf '${drop_in}.tmp' \
-          && mv '${drop_in}.tmp' '${drop_in}' \
-          && chmod 440 '${drop_in}'
-        " 2>/dev/null; then
-        echo -e "${GREEN}✔${NC}  Passwordless sudo drop-in written. Continuing setup..."
-        echo -e "${DIM}    Remember to run: ./setup.sh rollback-sudo   when setup is done.${NC}"
-        echo ""
-      else
-        sudo -n rm -f "${drop_in}.tmp" 2>/dev/null || true
-        echo -e "${RED}✖${NC}  Could not auto-configure sudo."
-        echo -e "    Run this once manually, then re-run setup.sh:"
-        echo -e "    ${BOLD}printf '%s\\n' '${USER} ALL=(ALL) NOPASSWD:ALL' 'Defaults:${USER} !use_pty' 'Defaults:${USER} !authenticate' | sudo tee /etc/sudoers.d/${USER}-nopasswd && sudo chmod 440 /etc/sudoers.d/${USER}-nopasswd${NC}"
-        exit 1
-      fi
-    fi
+    echo -e "  Root command:"
+    echo -e "    ${BOLD}tmp='${drop_in}.tmp'; printf '%s\\n' '${USER} ALL=(ALL) NOPASSWD:ALL' 'Defaults:${USER} !use_pty' 'Defaults:${USER} !authenticate' > \"\$tmp\" && visudo -cf \"\$tmp\" && mv \"\$tmp\" '${drop_in}' && chmod 440 '${drop_in}'${NC}"
+    echo ""
+    fatal "Passwordless sudo must be configured before setup can continue."
   else
     # Password exists or shadow unreadable — standard VPS.
     # Fall through: sudo -v below will prompt once for the password.
@@ -344,7 +311,7 @@ require_sudo() {
 
 _validate_version() {
   [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
-    || fatal "Invalid version '${1}' — expected format: v<MAJOR>.<MINOR>.<PATCH>  (e.g. v0.7.0)"
+    || fatal "Invalid version '${1}' — expected format: v<MAJOR>.<MINOR>.<PATCH>  (e.g. v0.7.1)"
 }
 
 _validate_swap_size() {
@@ -362,7 +329,7 @@ parse_setup_flags() {
       --swap)             [[ -z "${2:-}" ]] && fatal "--swap requires a size argument (e.g. --swap 16G)"
                           _validate_swap_size "$2"
                           FLAG_SWAP="${2^^}"; shift ;;   # normalise to uppercase: 16g → 16G
-      --version)          [[ -z "${2:-}" ]] && fatal "--version requires a value (e.g. --version v0.7.0)"
+      --version)          [[ -z "${2:-}" ]] && fatal "--version requires a value (e.g. --version v0.7.1)"
                           _validate_version "$2"
                           ARC_VERSION="$2"; shift ;;
       -h|--help)          usage ;;
@@ -849,7 +816,8 @@ phase_init_consensus() {
   echo -e "${DIM}  Generates a P2P identity key for your node (one-time operation).${NC}"
   echo ""
 
-  if [[ -f "${ARC_CONSENSUS_DIR}/config/node_key.json" ]]; then
+  local key_file="${ARC_CONSENSUS_DIR}/config/${CONSENSUS_KEY_BASENAME}"
+  if [[ -f "$key_file" ]]; then
     info "Identity key already exists — skipping init."
   else
     arc-node-consensus init --home "$ARC_CONSENSUS_DIR" 2>>"$LOG_FILE" \
@@ -862,7 +830,7 @@ phase_init_consensus() {
 }
 
 _backup_consensus_key() {
-  local key_file="${ARC_CONSENSUS_DIR}/config/node_key.json"
+  local key_file="${ARC_CONSENSUS_DIR}/config/${CONSENSUS_KEY_BASENAME}"
   [[ -f "$key_file" ]] || return 0
   mkdir -p "$BACKUP_DIR"; chmod 700 "$BACKUP_DIR"
 
@@ -874,10 +842,10 @@ _backup_consensus_key() {
       info "Matching key backup already exists (${existing}) — skipping."
       return 0
     fi
-  done < <(find "$BACKUP_DIR" -maxdepth 1 -name 'node_key_*.json' -type f 2>/dev/null || true)
+  done < <(find "$BACKUP_DIR" -maxdepth 1 -name 'priv_validator_key_*.json' -type f 2>/dev/null || true)
 
   local dest
-  dest="${BACKUP_DIR}/node_key_$(date +%Y%m%d_%H%M%S).json"
+  dest="${BACKUP_DIR}/priv_validator_key_$(date +%Y%m%d_%H%M%S).json"
   cp "$key_file" "$dest" || fatal "Failed to back up consensus key to ${dest}. Check disk space."
   chmod 600 "$dest"
   success "Consensus key backed up → ${dest}"
@@ -903,7 +871,7 @@ phase_install_services() {
   local rpc_addr="127.0.0.1"
   if $FLAG_EXPOSE_RPC; then
     rpc_addr="0.0.0.0"
-    warn "RPC exposed on 0.0.0.0:8545 — firewall recommended!"
+    warn "RPC exposed on 0.0.0.0:${EL_RPC_PORT} — firewall recommended!"
   fi
 
   # Pick the first reachable public RPC endpoint; fall back to the first entry.
@@ -951,9 +919,9 @@ ExecStart=${bin_path}/arc-node-execution node \\
   --auth-ipc.path /run/arc/auth.ipc \\
   --http \\
   --http.addr ${rpc_addr} \\
-  --http.port 8545 \\
+  --http.port ${EL_RPC_PORT} \\
   --http.api eth,net,web3,txpool,trace,debug \\
-  --metrics 127.0.0.1:9001 \\
+  --metrics 127.0.0.1:${EL_METRICS_PORT} \\
   --enable-arc-rpc \\
   --rpc.forwarder ${rpc_forwarder}
 
@@ -988,14 +956,16 @@ Environment=RUST_LOG=info
 WorkingDirectory=${ARC_DATA_DIR}
 ExecStart=${bin_path}/arc-node-consensus start \\
   --home ${ARC_CONSENSUS_DIR} \\
+  --private-key ${ARC_CONSENSUS_DIR}/config/${CONSENSUS_KEY_BASENAME} \\
+  --p2p.addr /ip4/0.0.0.0/tcp/${CL_P2P_PORT} \\
   --eth-socket /run/arc/reth.ipc \\
   --execution-socket /run/arc/auth.ipc \\
-  --rpc.addr 127.0.0.1:31000 \\
+  --rpc.addr 127.0.0.1:${CL_RPC_PORT} \\
   --follow \\
-  --follow.endpoint https://rpc.drpc.testnet.arc.network,wss://rpc.drpc.testnet.arc.network \\
-  --follow.endpoint https://rpc.quicknode.testnet.arc.network,wss://rpc.quicknode.testnet.arc.network \\
-  --follow.endpoint https://rpc.blockdaemon.testnet.arc.network,wss://rpc.blockdaemon.testnet.arc.network \\
-  --metrics 127.0.0.1:29000
+  --follow.endpoint https://rpc.drpc.testnet.arc.network \\
+  --follow.endpoint https://rpc.quicknode.testnet.arc.network \\
+  --follow.endpoint https://rpc.blockdaemon.testnet.arc.network \\
+  --metrics 127.0.0.1:${CL_METRICS_PORT}
 
 Restart=on-failure
 RestartSec=10
@@ -1049,12 +1019,12 @@ _configure_ufw() {
   sudo ufw default deny incoming
   sudo ufw default allow outgoing
   sudo ufw allow ssh comment 'SSH access'
-  $FLAG_EXPOSE_RPC && sudo ufw allow 8545/tcp comment 'Arc JSON-RPC'
+  $FLAG_EXPOSE_RPC && sudo ufw allow "${EL_RPC_PORT}/tcp" comment 'Arc JSON-RPC'
   # P2P ports — without these, incoming peer connections are silently blocked
   # and the node will run with zero peers behind the firewall.
-  sudo ufw allow 30303/tcp comment 'Arc EL P2P TCP'
-  sudo ufw allow 30303/udp comment 'Arc EL P2P UDP'
-  sudo ufw allow 31001/tcp comment 'Arc CL P2P TCP'
+  sudo ufw allow "${EL_P2P_PORT}/tcp" comment 'Arc EL P2P TCP'
+  sudo ufw allow "${EL_P2P_PORT}/udp" comment 'Arc EL P2P UDP'
+  sudo ufw allow "${CL_P2P_PORT}/tcp" comment 'Arc CL P2P TCP'
   sudo ufw --force enable
   success "ufw configured"
   sudo ufw status numbered
@@ -1069,8 +1039,8 @@ phase_verify() {
   export PATH="${HOME}/.foundry/bin:${HOME}/.cargo/bin:/usr/local/bin:${PATH}"
 
   local el_status cl_status services_ok=true
-  el_status=$(sudo systemctl is-active arc-execution 2>/dev/null || echo "unknown")
-  cl_status=$(sudo systemctl is-active arc-consensus  2>/dev/null || echo "unknown")
+  el_status=$(_service_state "arc-execution")
+  cl_status=$(_service_state "arc-consensus")
 
   if [[ "$el_status" == "active" ]]; then success "arc-execution : RUNNING"
   else error "arc-execution : ${el_status}"; warn "sudo journalctl -u arc-execution -n 50"; services_ok=false; fi
@@ -1083,18 +1053,18 @@ phase_verify() {
   if command -v cast &>/dev/null; then
     info "Waiting for RPC to become available..."
     local rpc_deadline; rpc_deadline=$(( $(date +%s) + 30 ))
-    until cast block-number --rpc-url http://localhost:8545 &>/dev/null \
+    until cast block-number --rpc-url "http://localhost:${EL_RPC_PORT}" &>/dev/null \
         || [[ $(date +%s) -ge $rpc_deadline ]]; do
       sleep 1
     done
 
     local b1 b2
-    b1=$(cast block-number --rpc-url http://localhost:8545 2>/dev/null | tr -dc '0-9')
+    b1=$(cast block-number --rpc-url "http://localhost:${EL_RPC_PORT}" 2>/dev/null | tr -dc '0-9' || true)
     b1=${b1:-0}
     info "Waiting for block to advance (up to 30s)..."
     local adv_deadline; adv_deadline=$(( $(date +%s) + 30 ))
     while true; do
-      b2=$(cast block-number --rpc-url http://localhost:8545 2>/dev/null | tr -dc '0-9')
+      b2=$(cast block-number --rpc-url "http://localhost:${EL_RPC_PORT}" 2>/dev/null | tr -dc '0-9' || true)
       b2=${b2:-0}
       [[ "$b2" -gt "$b1" ]] && break
       [[ $(date +%s) -ge $adv_deadline ]] && break
@@ -1103,7 +1073,7 @@ phase_verify() {
 
     if [[ "$b1" -eq 0 ]] && [[ "$b2" -eq 0 ]]; then
       warn "Node not yet responding to RPC — may still be initialising."
-      warn "Check again: cast block-number --rpc-url http://localhost:8545"
+      warn "Check again: cast block-number --rpc-url http://localhost:${EL_RPC_PORT}"
     elif [[ "$b2" -gt "$b1" ]]; then
       success "Node is syncing! Block advanced: ${b1} → ${b2}"
     else
@@ -1111,7 +1081,7 @@ phase_verify() {
     fi
   else
     warn "cast not found — add ~/.foundry/bin to PATH, then run:"
-    warn "  cast block-number --rpc-url http://localhost:8545"
+    warn "  cast block-number --rpc-url http://localhost:${EL_RPC_PORT}"
   fi
 }
 
@@ -1134,10 +1104,10 @@ print_summary() {
               || curl -sf --max-time 5 https://api4.my-ip.io/ip 2>/dev/null \
               || echo "<your-server-ip>")
   fi
-  echo "  JSON-RPC    :  http://${rpc_host}:8545"
-  echo "  CL RPC      :  http://localhost:31000"
-  echo "  EL Metrics  :  http://localhost:9001/metrics"
-  echo "  CL Metrics  :  http://localhost:29000/metrics"
+  echo "  JSON-RPC    :  http://${rpc_host}:${EL_RPC_PORT}"
+  echo "  CL RPC      :  http://localhost:${CL_RPC_PORT}"
+  echo "  EL Metrics  :  http://localhost:${EL_METRICS_PORT}/metrics"
+  echo "  CL Metrics  :  http://localhost:${CL_METRICS_PORT}/metrics"
   echo ""
 
   echo -e "${BOLD}Quick commands:${NC}"
@@ -1204,14 +1174,25 @@ _net_head() {
 # Local block height via cast; returns decimal or "N/A".
 _local_block() {
   command -v cast &>/dev/null || { echo "N/A"; return; }
-  local raw; raw=$(cast block-number --rpc-url http://localhost:8545 2>/dev/null | tr -dc '0-9')
+  local raw; raw=$(cast block-number --rpc-url "http://localhost:${EL_RPC_PORT}" 2>/dev/null | tr -dc '0-9' || true)
   [[ -n "$raw" ]] && echo "$raw" || echo "N/A"
 }
 
 # One-line service status with uptime.
+_service_state() {
+  local svc="$1" load_state active_state
+  load_state=$(systemctl show "$svc" --property=LoadState --value 2>/dev/null | head -1 || true)
+  active_state=$(systemctl show "$svc" --property=ActiveState --value 2>/dev/null | head -1 || true)
+  if [[ -z "$load_state" || "$load_state" == "not-found" ]]; then
+    echo "not-installed"
+  else
+    echo "${active_state:-unknown}"
+  fi
+}
+
 _svc_line() {
   local svc="$1"
-  local active; active=$(systemctl is-active "$svc" 2>/dev/null || echo "inactive")
+  local active; active=$(_service_state "$svc")
   if [[ "$active" == "active" ]]; then
     local ts; ts=$(systemctl show "$svc" --property=ActiveEnterTimestamp \
       | cut -d= -f2 2>/dev/null || echo "")
@@ -1227,6 +1208,8 @@ _svc_line() {
       fi
     fi
     echo -e "${GREEN}● RUNNING${NC}${DIM}${upstr}${NC}"
+  elif [[ "$active" == "not-installed" ]]; then
+    echo -e "${DIM}not installed${NC}"
   else
     echo -e "${RED}● ${active^^}${NC}"
   fi
@@ -1267,7 +1250,7 @@ _disk_info() {
 # Connected peer count via net_peerCount RPC.
 _peers() {
   command -v cast &>/dev/null || { echo "N/A"; return; }
-  local raw; raw=$(cast rpc net_peerCount --rpc-url http://localhost:8545 2>/dev/null \
+  local raw; raw=$(cast rpc net_peerCount --rpc-url "http://localhost:${EL_RPC_PORT}" 2>/dev/null \
     | sed 's/\x1b\[[0-9;]*m//g' | tr -d '"' | tr -d '[:space:]' || echo "")
   if [[ "$raw" =~ ^0x[0-9a-fA-F]+$ ]]; then
     printf '%d' "$(( 16#${raw#0x} ))"
@@ -1395,7 +1378,7 @@ cmd_status() {
   echo ""
 
   for svc in "arc-execution" "arc-consensus"; do
-    local active; active=$(systemctl is-active "$svc" 2>/dev/null || echo "not-installed")
+    local active; active=$(_service_state "$svc")
     printf "  %-36s" "$svc"
     case "$active" in
       active)        echo -e "${GREEN}● RUNNING${NC}" ;;
@@ -1406,8 +1389,10 @@ cmd_status() {
   echo ""
 
   if command -v cast &>/dev/null; then
-    local lb; lb=$(cast block-number --rpc-url http://localhost:8545 2>/dev/null | tr -dc '0-9')
+    local lb; lb=$(cast block-number --rpc-url "http://localhost:${EL_RPC_PORT}" 2>/dev/null | tr -dc '0-9' || true)
     printf "  %-36s${CYAN}%s${NC}\n" "Local block height" "${lb:-N/A}"
+    local peers; peers=$(_peers)
+    printf "  %-36s${CYAN}%s${NC}\n" "Execution peers" "$peers"
   fi
 
   if [[ -d "$ARC_DATA_DIR" ]]; then
@@ -1418,8 +1403,8 @@ cmd_status() {
   local free_disk; free_disk=$(df -h "$HOME" | awk 'NR==2{print $4}')
   printf "  %-36s${CYAN}%s${NC}\n" "Free disk (home partition)" "$free_disk"
   echo ""
-  echo -e "  ${DIM}RPC      :  http://localhost:8545        CL RPC  :  http://localhost:31000${NC}"
-  echo -e "  ${DIM}Metrics  :  http://localhost:9001/metrics         http://localhost:29000/metrics${NC}"
+  echo -e "  ${DIM}RPC      :  http://localhost:${EL_RPC_PORT}        CL RPC  :  http://localhost:${CL_RPC_PORT}${NC}"
+  echo -e "  ${DIM}Metrics  :  http://localhost:${EL_METRICS_PORT}/metrics         http://localhost:${CL_METRICS_PORT}/metrics${NC}"
   echo ""
 }
 
@@ -1450,14 +1435,23 @@ cmd_logs() {
 #  COMMAND: start / stop / restart
 # ════════════════════════════════════════════════════════════
 
+_stop_arc_services() {
+  sudo systemctl stop arc-consensus 2>/dev/null || true
+  sudo systemctl stop arc-execution 2>/dev/null || true
+}
+
 cmd_service() {
   local action="$1"
   require_sudo
-  echo -e "${CYAN}${action^}ing Arc services...${NC}"
+  case "$action" in
+    start)   echo -e "${CYAN}Starting Arc services...${NC}" ;;
+    stop)    echo -e "${CYAN}Stopping Arc services...${NC}" ;;
+    restart) echo -e "${CYAN}Restarting Arc services...${NC}" ;;
+  esac
   case "$action" in
     stop)
       # Always stop consensus before execution — safe tear-down order.
-      sudo systemctl stop arc-consensus arc-execution 2>/dev/null || true
+      _stop_arc_services
       success "Services stopped." ;;
     start)
       sudo systemctl start arc-execution
@@ -1465,7 +1459,7 @@ cmd_service() {
       sudo systemctl start arc-consensus
       success "Services started." ;;
     restart)
-      sudo systemctl stop arc-consensus arc-execution 2>/dev/null || true
+      _stop_arc_services
       sudo systemctl is-active --quiet arc-consensus 2>/dev/null \
         && warn "arc-consensus still active after stop — watch for state conflicts."
       sudo systemctl is-active --quiet arc-execution 2>/dev/null \
@@ -1531,8 +1525,8 @@ cmd_update() {
       new_ver="$detected"
     else
       warn "Could not reach GitHub API. Check your network."
-      ask "Which Arc version to update to? (e.g. v0.7.0): "
-      read -r new_ver || fatal "Unexpected EOF on stdin — pass the version explicitly: ./setup.sh update v0.7.0"
+      ask "Which Arc version to update to? (e.g. v0.7.1): "
+      read -r new_ver || fatal "Unexpected EOF on stdin — pass the version explicitly: ./setup.sh update v0.7.1"
     fi
   fi
 
@@ -1550,7 +1544,7 @@ cmd_update() {
   confirm "Proceed with update to ${new_ver}?" || { echo "Cancelled."; exit 0; }
 
   info "Stopping services..."
-  sudo systemctl stop arc-consensus arc-execution 2>/dev/null || true
+  _stop_arc_services
   # Refuse to overwrite binaries if either service is still active.
   sudo systemctl is-active --quiet arc-consensus 2>/dev/null \
     && fatal "arc-consensus is still active — refusing to overwrite binaries. Check: sudo journalctl -u arc-consensus -n 20"
@@ -1655,8 +1649,8 @@ cmd_update() {
 
 # ════════════════════════════════════════════════════════════
 #  SUDO ROLLBACK
-#  Removes the passwordless sudo drop-in written by _bootstrap_sudo
-#  during setup on keypair-only VPS instances.  Safe to call even
+#  Removes the passwordless sudo drop-in documented by _bootstrap_sudo
+#  for keypair-only VPS instances. Safe to call even
 #  when the file does not exist (no-op with an info message).
 #  Called by both cmd_uninstall and cmd_rollback_sudo.
 # ════════════════════════════════════════════════════════════
@@ -1671,7 +1665,7 @@ _rollback_sudo_dropin() {
 
   echo ""
   info "Sudoers drop-in found: ${drop_in}"
-  echo -e "  ${DIM}This file was written by setup.sh to allow passwordless sudo on a keypair VPS.${NC}"
+  echo -e "  ${DIM}This file grants passwordless sudo for keypair-only VPS setup.${NC}"
   echo -e "  ${DIM}Removing it restores your original sudo configuration.${NC}"
   echo ""
 
@@ -1690,8 +1684,8 @@ cmd_rollback_sudo() {
   echo -e "${BOLD}${CYAN}Rollback Passwordless Sudo${NC}"
   echo "════════════════════════════════════════════════════"
   echo ""
-  echo -e "  This removes the sudoers drop-in written by setup.sh if your server"
-  echo -e "  was detected as a keypair-only VPS during the initial install:"
+  echo -e "  This removes the sudoers drop-in used when a keypair-only VPS"
+  echo -e "  account has no password but setup needs sudo:"
   echo ""
   echo -e "    ${DIM}/etc/sudoers.d/${USER}-nopasswd${NC}"
   echo ""
@@ -1732,7 +1726,7 @@ cmd_uninstall() {
 
   # Services
   info "Stopping and removing services..."
-  sudo systemctl stop arc-consensus arc-execution 2>/dev/null || true
+  _stop_arc_services
   sudo systemctl disable arc-consensus arc-execution 2>/dev/null || true
   sudo rm -f /etc/systemd/system/arc-execution.service \
              /etc/systemd/system/arc-consensus.service
