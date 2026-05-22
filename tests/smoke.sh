@@ -24,6 +24,9 @@ assert_output_contains "$help_output" 'Arc Node Setup & Manager'
 assert_output_contains "$help_output" 'Testnet v0\.7\.1'
 assert_output_contains "$help_output" '\./setup\.sh update v0\.7\.1'
 assert_output_contains "$help_output" '--version VER[[:space:]]+Arc version to install[[:space:]]+\(default: v0\.7\.1\)'
+assert_output_contains "$help_output" 'https://docs\.arc\.io'
+assert_file_contains README.md 'bash -s -- setup --yes'
+assert_file_contains README.md 'bash -s -- setup -y'
 
 assert_file_contains setup.sh '^ARC_VERSION_DEFAULT="v0\.7\.1"$'
 assert_file_contains setup.sh '^CONSENSUS_KEY_BASENAME="priv_validator_key\.json"$'
@@ -31,14 +34,20 @@ assert_file_contains setup.sh '^EL_RPC_PORT=8545$'
 assert_file_contains setup.sh '^EL_P2P_PORT=30303$'
 assert_file_contains setup.sh '^CL_RPC_PORT=31000$'
 assert_file_contains setup.sh '^CL_P2P_PORT=31001$'
+assert_file_contains setup.sh '^MIN_DISK_GB=200$'
 assert_file_contains setup.sh 'systemctl show "\$svc" --property=LoadState --value'
 assert_file_contains setup.sh '--private-key \$\{ARC_CONSENSUS_DIR\}/config/\$\{CONSENSUS_KEY_BASENAME\}'
+assert_file_contains setup.sh '--full[[:space:]]*\\\\'
 assert_file_contains setup.sh '--p2p\.addr /ip4/0\.0\.0\.0/tcp/\$\{CL_P2P_PORT\}'
-assert_file_contains setup.sh '--follow\.endpoint https://rpc\.drpc\.testnet\.arc\.network'
+assert_file_contains setup.sh '--follow\.endpoint https://rpc\.drpc\.testnet\.arc\.network,wss=rpc\.drpc\.testnet\.arc\.network'
+assert_file_contains setup.sh '--follow\.endpoint https://rpc\.blockdaemon\.testnet\.arc\.network,wss=rpc\.blockdaemon\.testnet\.arc\.network/websocket'
+assert_file_contains setup.sh '--execution-persistence-backpressure[[:space:]]*\\\\'
+assert_file_contains setup.sh '--execution-persistence-backpressure-threshold=50'
 assert_file_contains setup.sh 'sudo ufw allow "\$\{EL_P2P_PORT\}/tcp"'
 assert_file_contains setup.sh 'sudo ufw allow "\$\{EL_P2P_PORT\}/udp"'
 assert_file_contains setup.sh 'sudo ufw allow "\$\{CL_P2P_PORT\}/tcp"'
 assert_file_contains setup.sh 'printf "  %-36s\$\{CYAN\}%s\$\{NC\}\\n" "Execution peers" "\$peers"'
+assert_file_contains README.md 'fresh node cannot bootstrap from genesis'
 
 if grep -Eq 'node_key\.json|node_key_<timestamp>' setup.sh README.md; then
   fail 'stale node_key.json documentation or script reference found'
@@ -50,6 +59,10 @@ fi
 
 if grep -Eq 'sudo -n bash -c|auto-accepting sudo drop-in|Allow setup\.sh to write|written during setup' setup.sh README.md; then
   fail 'sudo bootstrap still claims it can self-write a sudoers drop-in'
+fi
+
+if grep -Eq 'will sync from genesis|syncs from genesis|sync from genesis \(very slow\)' setup.sh README.md; then
+  fail 'snapshot skip guidance still claims a fresh genesis sync is supported'
 fi
 
 tmp_dir="$(mktemp -d)"
