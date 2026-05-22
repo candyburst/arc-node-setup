@@ -4,7 +4,7 @@
 > Arc is Circle's stablecoin-native Layer-1 blockchain — built for USDC and on-chain finance.
 
 [![Shell](https://img.shields.io/badge/shell-bash-89e051?logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
-[![Testnet](https://img.shields.io/badge/Arc%20Testnet-v0.6.0-blue)](https://github.com/circlefin/arc-node)
+[![Testnet](https://img.shields.io/badge/Arc%20Testnet-v0.7.1-blue)](https://github.com/circlefin/arc-node)
 [![Platform](https://img.shields.io/badge/platform-Ubuntu%2022.04%2B%20%7C%20Debian%2012%2B-orange)](https://ubuntu.com/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -58,7 +58,7 @@
 |---|---|
 | Installs system packages, Rust, and Foundry | `apt-get` + `rustup` + `foundryup` |
 | Builds 3 Arc binaries from source | `cargo install` from `circlefin/arc-node` |
-| Downloads blockchain snapshots (~60 GB) | `arc-snapshots download` |
+| Downloads blockchain snapshots (~84 GB compressed) | `arc-snapshots download` |
 | Initialises your node's P2P identity key | `arc-node-consensus init` |
 | Registers auto-start + crash-restart services | `systemd` unit files |
 | Provides live monitoring, logging, and updates | Built-in subcommands |
@@ -74,12 +74,12 @@ Setup takes **20–60 minutes** on a fast machine (dominated by Rust compilation
 | **OS** | Ubuntu 22.04 or Debian 12 | Ubuntu 22.04 LTS |
 | **CPU** | 8 cores | 16+ cores |
 | **RAM** | 64 GB | 128 GB |
-| **Disk** | 150 GB free SSD | 500 GB+ NVMe SSD |
+| **Disk** | 200 GB free SSD | 1 TB+ NVMe SSD |
 | **Network** | Stable broadband | 1 Gbps unmetered |
 | **User** | Non-root with `sudo` | — |
 | **Init** | systemd | — |
 
-> **RAM note:** The script builds all three crates in parallel, limited to `nproc / 2` jobs to avoid OOM during the Reth link phase. If you have exactly 64 GB of RAM, consider passing `--swap 32G` to add headroom.
+> **RAM note:** Each Rust build is limited to `nproc / 2` jobs to avoid OOM during the Reth link phase. If you have exactly 64 GB of RAM, consider passing `--swap 32G` to add headroom.
 
 ---
 
@@ -87,12 +87,16 @@ Setup takes **20–60 minutes** on a fast machine (dominated by Rust compilation
 
 ```bash
 # One command to setup
-curl -fsSL https://raw.githubusercontent.com/candyburst/arc-node-setup/main/setup.sh | bash -s -- --yes
+curl -fsSL https://raw.githubusercontent.com/candyburst/arc-node-setup/main/setup.sh | bash -s -- setup --yes
+```
 
 Or equivalently:
 
-curl -fsSL https://raw.githubusercontent.com/candyburst/arc-node-setup/main/setup.sh | bash -s -- -y
+```bash
+curl -fsSL https://raw.githubusercontent.com/candyburst/arc-node-setup/main/setup.sh | bash -s -- setup -y
+```
 
+```bash
 # Download
 curl -O https://raw.githubusercontent.com/candyburst/arc-node-setup/main/setup.sh
 chmod +x setup.sh
@@ -121,12 +125,12 @@ chmod +x setup.sh
 | `logs cl` | Tail consensus-layer logs |
 | `logs both` | Tail both layers simultaneously |
 | `update` | Auto-detect latest Arc version and rebuild |
-| `update v0.7.0` | Upgrade to a specific version |
+| `update v0.7.1` | Upgrade to a specific version |
 | `restart` | Restart both services (safe tear-down order) |
 | `stop` | Stop both services |
 | `start` | Start both services |
 | `uninstall` | Guided removal of services, binaries, and data |
-| `rollback-sudo` | Remove the passwordless sudo drop-in written during setup |
+| `rollback-sudo` | Remove a passwordless sudo drop-in for this user |
 | `help` | Show usage help |
 
 ---
@@ -138,11 +142,11 @@ All options apply to the `setup` command:
 | Flag | Description |
 |---|---|
 | `-y`, `--yes` | Skip all yes/no prompts (non-interactive / CI mode) |
-| `--skip-snap` | Skip snapshot download — syncs from genesis (very slow, not recommended) |
+| `--skip-snap` | Skip snapshot download — only for existing compatible data |
 | `--expose-rpc` | Bind JSON-RPC on `0.0.0.0` — needed for MetaMask over LAN/WAN |
 | `--with-firewall` | Auto-configure `ufw` firewall rules |
 | `--swap SIZE` | Create a swap file, e.g. `--swap 16G` |
-| `--version VER` | Install a specific Arc version, e.g. `--version v0.7.0` |
+| `--version VER` | Install a specific Arc version, e.g. `--version v0.7.1` |
 | `-h`, `--help` | Show help |
 
 **Examples:**
@@ -152,7 +156,7 @@ All options apply to the `setup` command:
 ./setup.sh setup --yes                        # Fully unattended / CI
 ./setup.sh setup --expose-rpc --with-firewall # Open to LAN + configure firewall
 ./setup.sh setup --swap 32G --yes             # Add 32 GB swap, no prompts
-./setup.sh setup --version v0.7.0            # Install a specific version
+./setup.sh setup --version v0.7.1            # Install a specific version
 ```
 
 ---
@@ -164,7 +168,7 @@ All options apply to the `setup` command:
 Displays a banner, then checks:
 
 - **RAM** ≥ 64 GB (warns, does not block)
-- **Disk** ≥ 150 GB free (warns, does not block)
+- **Disk** ≥ 200 GB free (warns, does not block)
 - **OS** is Ubuntu 22.04+ or Debian 12+
 - **User** is not root (root execution is blocked)
 - **systemd** is present
@@ -208,16 +212,16 @@ Creates:
 /run/arc/             ← IPC socket directory
 ```
 
-Then offers to download the **testnet snapshot** (~60 GB download, ~120 GB on disk). This lets your node start near the chain tip in 1–2 hours rather than syncing from genesis (which would take many days).
+Then offers to download the **testnet snapshots**. The upstream Arc repo currently lists the latest snapshots as roughly **68 GB EL + 16 GB CL compressed**, expanding to roughly **103 GB EL + 36 GB CL**. The script requires 200 GB free before starting so the compressed archives and extracted data both have room.
 
-The free disk space is checked before downloading. Snapshot download is given a 4-hour timeout.
+The Arc node docs say a fresh node needs a snapshot to bootstrap; syncing a new node from genesis is currently not supported. Snapshot download is given a 4-hour timeout.
 
 ### Phase 5 — Initialise Consensus Layer
 
 Runs `arc-node-consensus init` to generate your node's **P2P identity key** at:
 
 ```
-~/.arc/consensus/config/node_key.json
+~/.arc/consensus/config/priv_validator_key.json
 ```
 
 This is a one-time operation. The key is automatically backed up to `~/.arc-key-backup/` with a timestamp. **Keep this backup — losing it means a new P2P identity.**
@@ -228,14 +232,16 @@ Writes two systemd unit files:
 
 | Service | Binary | Key Behaviour |
 |---|---|---|
-| `arc-execution` | `arc-node-execution` | Runs Reth EL; exposes JSON-RPC on `localhost:8545` (or `0.0.0.0:8545` with `--expose-rpc`) |
-| `arc-consensus` | `arc-node-consensus` | Runs the BFT consensus layer; connects to EL via IPC socket |
+| `arc-execution` | `arc-node-execution` | Runs Reth EL with Arc's `--full` pruning preset; exposes JSON-RPC on `localhost:8545` (or `0.0.0.0:8545` with `--expose-rpc`) |
+| `arc-consensus` | `arc-node-consensus` | Runs the BFT consensus layer in follow mode with `--full` and execution-persistence backpressure; connects to EL via IPC socket |
 
 Both services:
 - Start automatically on boot (`WantedBy=multi-user.target`)
 - Restart automatically on crash (`Restart=on-failure`, 10-second delay)
 - Log to `journald`
 - Have `LimitNOFILE=1048576`
+
+The service flags follow the upstream Arc node binary guide: both layers start with `--full`, and the consensus layer adds `--execution-persistence-backpressure --execution-persistence-backpressure-threshold=50`.
 
 The script waits up to 120 seconds for the execution-layer IPC socket (`/run/arc/reth.ipc`) to appear before starting the consensus layer.
 
@@ -305,7 +311,7 @@ Uses `journalctl -f` under the hood. Press `Ctrl+C` to stop.
 
 ```bash
 ./setup.sh update              # Auto-detect latest version from GitHub
-./setup.sh update v0.7.0       # Upgrade to a specific version
+./setup.sh update v0.7.1       # Upgrade to a specific version
 ```
 
 The update process:
@@ -335,7 +341,7 @@ The ordering (consensus before execution on stop, execution before consensus on 
 Guided removal. You are asked separately (with a danger prompt) about:
 
 1. Services and binaries — removed automatically after confirmation
-2. Chain data at `~/.arc` (~120+ GB) — separate `yes`-to-confirm prompt
+2. Chain data at `~/.arc` (~139+ GB with current snapshots) — separate `yes`-to-confirm prompt
 3. Source code at `~/arc-node-src` — optional
 4. Passwordless sudo drop-in (if present)
 
@@ -347,7 +353,7 @@ The key backup at `~/.arc-key-backup/` is intentionally kept.
 ./setup.sh rollback-sudo
 ```
 
-Removes `/etc/sudoers.d/<USER>-nopasswd` if it was written during setup on a keypair-only VPS. Safe to run even if the file does not exist.
+Removes `/etc/sudoers.d/<USER>-nopasswd` if you created it for a keypair-only VPS. Safe to run even if the file does not exist.
 
 ---
 
@@ -400,13 +406,13 @@ Configures `ufw` with these rules:
 ./setup.sh setup --skip-snap
 ```
 
-Skips the snapshot download entirely. The node will sync from genesis block 0, which can take **many days**. Not recommended unless you have a specific reason.
+Skips only the script-managed snapshot download. Use this only if compatible execution and consensus data already exists, or if you will bootstrap it manually before expecting the services to sync. The current Arc node docs say a fresh node cannot bootstrap from genesis.
 
 ### Pin a Specific Arc Version
 
 ```bash
-./setup.sh setup --version v0.6.0
-./setup.sh setup --version v0.7.0 --yes
+./setup.sh setup --version v0.7.1
+./setup.sh setup --version v0.7.1 --yes
 ```
 
 Version strings must match `v<MAJOR>.<MINOR>.<PATCH>` exactly. The tag must exist in `circlefin/arc-node`.
@@ -423,9 +429,9 @@ Skips all yes/no prompts. Danger prompts (uninstall, irreversible data deletion)
 
 ## Keypair VPS — Passwordless Sudo
 
-Many cloud VPS providers (AWS, GCP, Azure, DigitalOcean) use SSH key authentication with no password set on the account. In this case `sudo` cannot be used non-interactively, which would block automated setup steps.
+Many cloud VPS providers (AWS, GCP, Azure, DigitalOcean) use SSH key authentication with no password set on the account. If the image already grants passwordless sudo, setup proceeds normally. If sudo prompts for a password but the account has no password, setup cannot elevate itself.
 
-The script detects this by inspecting the shadow password field. If the account has no password (`!`, `!!`, or `*`), it offers to write:
+The script detects this by inspecting the shadow password field. If the account has no password (`!`, `!!`, or `*`) and sudo is not already usable, it prints the sudoers drop-in to create from your provider console, cloud-init, or another root/admin session:
 
 ```
 /etc/sudoers.d/<USER>-nopasswd
@@ -438,7 +444,7 @@ Defaults:<USER> !use_pty
 Defaults:<USER> !authenticate
 ```
 
-This is validated with `visudo -c` before installation. **After setup is complete, remove it:**
+Validate the temporary file with `visudo -c` before installing it. **After setup is complete, remove it:**
 
 ```bash
 ./setup.sh rollback-sudo
@@ -467,12 +473,12 @@ After a successful install:
 ├── arc-setup.log           ← Full setup log (all output)
 ├── arc-node-src/           ← Cloned + compiled source (circlefin/arc-node)
 ├── .arc/
-│   ├── execution/          ← Reth execution-layer data (~120 GB with snapshots)
-│   └── consensus/
+│   ├── execution/          ← Reth execution-layer data (~103 GB with current snapshots)
+│   └── consensus/          ← Consensus-layer data (~36 GB with current snapshots)
 │       └── config/
-│           └── node_key.json   ← Your P2P identity key
+│           └── priv_validator_key.json   ← Your P2P identity key
 └── .arc-key-backup/
-    └── node_key_<timestamp>.json  ← Timestamped key backup (keep safe!)
+    └── priv_validator_key_<timestamp>.json  ← Timestamped key backup (keep safe!)
 
 /usr/local/bin/
 ├── arc-node-execution      ← EL binary
@@ -540,7 +546,7 @@ cat ~/arc-setup.log
 
 | Resource | URL |
 |---|---|
-| Arc Docs | https://docs.arc.network |
+| Arc Docs | https://docs.arc.io |
 | Block Explorer | https://testnet.arcscan.app |
 | Testnet Faucet | https://faucet.circle.com |
 | Arc Discord | https://discord.com/invite/buildonarc |
@@ -567,7 +573,7 @@ Any chain, any token — every bit is appreciated! ☕
 
 ---
 
-> Arc Network is on public testnet. The network may experience instability, resets, or breaking changes. Always back up your `node_key.json`.
+> Arc Network is on public testnet. The network may experience instability, resets, or breaking changes. Always back up your `priv_validator_key.json`.
 
 ---
 
