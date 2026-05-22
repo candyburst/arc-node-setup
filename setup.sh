@@ -24,7 +24,7 @@
 #
 #  SETUP OPTIONS:
 #    -y, --yes           Skip all yes/no prompts (non-interactive / CI)
-#    --skip-snap         Skip snapshot download (sync from genesis — very slow)
+#    --skip-snap         Skip snapshot download (requires existing data)
 #    --expose-rpc        Bind JSON-RPC on 0.0.0.0 (needed for MetaMask over LAN)
 #    --with-firewall     Auto-configure ufw firewall rules
 #    --swap SIZE         Create swap file, e.g. --swap 16G
@@ -65,7 +65,7 @@ STATE_FILE="${HOME}/.arc-setup-state"
 BACKUP_DIR="${HOME}/.arc-key-backup"
 
 MIN_RAM_GB=64
-MIN_DISK_GB=150
+MIN_DISK_GB=200
 MONITOR_INTERVAL=5
 EL_RPC_PORT=8545
 EL_P2P_PORT=30303
@@ -179,7 +179,7 @@ ${BOLD}COMMANDS${NC}
 
 ${BOLD}SETUP OPTIONS${NC}
   ${YELLOW}-y, --yes${NC}           Skip all yes/no prompts (non-interactive)
-  ${YELLOW}--skip-snap${NC}         Skip snapshot download (sync from genesis — very slow)
+  ${YELLOW}--skip-snap${NC}         Skip snapshot download (requires existing data)
   ${YELLOW}--expose-rpc${NC}        Bind JSON-RPC on 0.0.0.0 (needed for MetaMask over LAN/WAN)
   ${YELLOW}--with-firewall${NC}     Auto-configure ufw firewall rules
   ${YELLOW}--swap SIZE${NC}         Create swap file, e.g. --swap 16G  (use if RAM < ${MIN_RAM_GB} GB)
@@ -199,7 +199,7 @@ ${BOLD}EXAMPLES${NC}
   ./setup.sh rollback-sudo          Remove the passwordless sudo drop-in
 
 ${BOLD}RESOURCES${NC}
-  Docs      https://docs.arc.network
+  Docs      https://docs.arc.io
   Explorer  https://testnet.arcscan.app
   Faucet    https://faucet.circle.com
   Discord   https://discord.com/invite/buildonarc
@@ -377,8 +377,8 @@ phase_welcome() {
   echo -e "${YELLOW}⚠  Requirements at a glance:${NC}"
   echo "   OS       :  Ubuntu 22.04+ or Debian 12+"
   echo "   RAM      :  64 GB+  (Reth spikes during initial sync)"
-  echo "   Storage  :  1 TB+ NVMe SSD  (150 GB free minimum)"
-  echo "   Network  :  Stable 24 Mbps+  (snapshots ≈ 60 GB)"
+  echo "   Storage  :  1 TB+ NVMe SSD  (${MIN_DISK_GB} GB free minimum)"
+  echo "   Network  :  Stable 24 Mbps+  (snapshots ≈ 84 GB compressed)"
   echo "   Time     :  1–3 hours total (compile + snapshot download)"
   echo ""
   [[ -n "$FLAG_SWAP"      ]] && info "--swap ${FLAG_SWAP}: will create a swap file."
@@ -774,15 +774,15 @@ phase_setup_data() {
   echo ""
 
   if $FLAG_SKIP_SNAP; then
-    warn "--skip-snap: Skipping snapshots. Node will sync from genesis (very slow)."
+    warn "--skip-snap: Skipping snapshot download. Arc docs do not support bootstrapping a fresh node from genesis."
   else
-    echo -e "${DIM}  Snapshots let you start near the chain tip instead of syncing${NC}"
-    echo -e "${DIM}  from block 0 (genesis), which would take many days.${NC}"
+    echo -e "${DIM}  Arc docs require snapshots to bootstrap a fresh node.${NC}"
+    echo -e "${DIM}  This downloads the latest EL and CL pruned snapshots.${NC}"
     echo ""
-    warn "~60 GB download → ~120 GB on disk. Typically 1–2 hours."
+    warn "~84 GB compressed → ~139 GB extracted. Download time depends on connection speed."
     echo ""
     if confirm "Download blockchain snapshots? (strongly recommended)"; then
-      local required_gb=130
+      local required_gb=200
       local free_gb; free_gb=$(df -BG "$ARC_DATA_DIR" | awk 'NR==2{gsub("G",""); print $4}')
       if [[ -z "$free_gb" ]]; then
         warn "Could not parse free disk space for ${ARC_DATA_DIR} — assuming 0 GB."
@@ -798,7 +798,7 @@ phase_setup_data() {
         || fatal "Snapshot download failed or timed out after 4 hours. Check ${LOG_FILE}"
       success "Snapshots downloaded and extracted!"
     else
-      warn "Skipped — node will sync from genesis (very slow)."
+      warn "Skipped — setup will continue, but a fresh node needs compatible snapshot data before it can bootstrap."
     fi
   fi
 
@@ -899,7 +899,7 @@ phase_install_services() {
   sudo tee /etc/systemd/system/arc-execution.service > /dev/null <<EOF
 [Unit]
 Description=Arc Node — Execution Layer (Reth)
-Documentation=https://docs.arc.network
+Documentation=https://docs.arc.io
 After=network-online.target
 Wants=network-online.target
 
@@ -913,6 +913,7 @@ WorkingDirectory=${ARC_DATA_DIR}
 ExecStart=${bin_path}/arc-node-execution node \\
   --chain arc-testnet \\
   --datadir ${ARC_EXECUTION_DIR} \\
+  --full \\
   --disable-discovery \\
   --ipcpath /run/arc/reth.ipc \\
   --auth-ipc \\
@@ -944,7 +945,7 @@ EOF
   sudo tee /etc/systemd/system/arc-consensus.service > /dev/null <<EOF
 [Unit]
 Description=Arc Node — Consensus Layer (Malachite)
-Documentation=https://docs.arc.network
+Documentation=https://docs.arc.io
 After=arc-execution.service
 Requires=arc-execution.service
 
@@ -957,14 +958,17 @@ WorkingDirectory=${ARC_DATA_DIR}
 ExecStart=${bin_path}/arc-node-consensus start \\
   --home ${ARC_CONSENSUS_DIR} \\
   --private-key ${ARC_CONSENSUS_DIR}/config/${CONSENSUS_KEY_BASENAME} \\
+  --full \\
   --p2p.addr /ip4/0.0.0.0/tcp/${CL_P2P_PORT} \\
   --eth-socket /run/arc/reth.ipc \\
   --execution-socket /run/arc/auth.ipc \\
   --rpc.addr 127.0.0.1:${CL_RPC_PORT} \\
   --follow \\
-  --follow.endpoint https://rpc.drpc.testnet.arc.network \\
-  --follow.endpoint https://rpc.quicknode.testnet.arc.network \\
-  --follow.endpoint https://rpc.blockdaemon.testnet.arc.network \\
+  --follow.endpoint https://rpc.drpc.testnet.arc.network,wss=rpc.drpc.testnet.arc.network \\
+  --follow.endpoint https://rpc.quicknode.testnet.arc.network,wss=rpc.quicknode.testnet.arc.network \\
+  --follow.endpoint https://rpc.blockdaemon.testnet.arc.network,wss=rpc.blockdaemon.testnet.arc.network/websocket \\
+  --execution-persistence-backpressure \\
+  --execution-persistence-backpressure-threshold=50 \\
   --metrics 127.0.0.1:${CL_METRICS_PORT}
 
 Restart=on-failure
@@ -1121,7 +1125,7 @@ print_summary() {
   echo ""
 
   echo -e "${BOLD}Resources:${NC}"
-  echo "  Docs       :  https://docs.arc.network"
+  echo "  Docs       :  https://docs.arc.io"
   echo "  Explorer   :  https://testnet.arcscan.app"
   echo "  Faucet     :  https://faucet.circle.com"
   echo "  Discord    :  https://discord.com/invite/buildonarc"
@@ -1717,7 +1721,7 @@ cmd_uninstall() {
   echo "  • Passwordless sudo drop-in  (/etc/sudoers.d/${USER}-nopasswd)"
   echo ""
   echo "Optionally (asked separately):"
-  echo "  • Chain data at ${ARC_DATA_DIR}  (~120+ GB)"
+  echo "  • Chain data at ${ARC_DATA_DIR}  (~139+ GB with current snapshots)"
   echo "  • Source code at ${BUILD_DIR}"
   echo ""
 
